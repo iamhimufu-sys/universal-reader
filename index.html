@@ -1,0 +1,1042 @@
+<!-- Glad we're building this together. -->
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Universal Document Reader + TTS</title>
+  <style>
+    :root {
+      --bg: #f6f7f8;
+      --fg: #111;
+      --muted: #666;
+      --panel: #fff;
+      --border: #d9d9d9;
+      --accent: #1a73e8;
+      --focus: #0b57d0;
+    }
+    .dark {
+      --bg: #0f1113;
+      --fg: #e9eaec;
+      --muted: #a0a6ad;
+      --panel: #15181b;
+      --border: #2a2f35;
+      --accent: #6ea8fe;
+      --focus: #7db2ff;
+    }
+    * { box-sizing: border-box; }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: var(--bg);
+      color: var(--fg);
+      -webkit-text-size-adjust: 100%;
+      line-height: 1.45;
+    }
+    .app {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100%;
+    }
+    header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel);
+    }
+    header .row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    header input[type="file"] {
+      max-width: 220px;
+    }
+    header button, header select, header input, header textarea {
+      font: inherit;
+    }
+    header button {
+      background: #eef1f4;
+      border: 1px solid #cdd3d9;
+      color: var(--fg);
+      padding: 7px 12px;
+      border-radius: 6px;
+    }
+    header button:hover { background: #e4e9ef; }
+    header button:active { transform: translateY(1px); }
+    header button:focus, header input:focus, header select:focus, header textarea:focus {
+      outline: 2px solid var(--focus);
+      outline-offset: 1px;
+    }
+    header .tiny { font-size: 12px; color: var(--muted); }
+    .main {
+      display: grid;
+      grid-template-rows: auto 1fr;
+      gap: 10px;
+      padding: 10px 14px 70px;
+      min-height: 0;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 10px;
+      box-shadow: 0 1px 0 rgba(0,0,0,0.03);
+    }
+    .doc-panel {
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    #editor {
+      width: 100%;
+      min-height: 120px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 10px;
+      background: var(--bg);
+      color: var(--fg);
+      line-height: 1.45;
+    }
+    #doc {
+      height: 100%;
+      overflow: auto;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      background: var(--panel);
+      padding: 10px;
+      flex: 1;
+      min-height: 0;
+      line-height: 1.5;
+    }
+    .page {
+      border-bottom: 1px dashed var(--border);
+      padding: 10px 0;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+    .page:last-child { border-bottom: 0; }
+    .page .num {
+      font-size: 12px;
+      color: var(--muted);
+      margin-bottom: 6px;
+    }
+    .page.loading {
+      color: var(--muted);
+      font-style: italic;
+    }
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+    .toolbar input[type="search"] {
+      padding: 6px 8px;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      background: var(--panel);
+      color: var(--fg);
+    }
+    .tts-bar {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: var(--panel);
+      border-top: 1px solid var(--border);
+      padding: 8px 10px;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 6px;
+      z-index: 999;
+    }
+    .tts-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+    }
+    .tts-controls button, .tts-controls select, .tts-controls input {
+      font: inherit;
+    }
+    .tts-controls button {
+      background: #eef1f4;
+      border: 1px solid #cdd3d9;
+      color: var(--fg);
+      padding: 6px 10px;
+      border-radius: 6px;
+    }
+    .tts-controls button:hover { background: #e4e9ef; }
+    .tts-controls label {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .sr {
+      position: absolute;
+      left: -9999px;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+    }
+    .row-split {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .status {
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .hidden { display: none; }
+  </style>
+</head>
+<body>
+  <div class="app" id="app">
+    <header>
+      <div class="row">
+        <input id="fileInput" type="file" accept=".pdf,.doc,.docx,.txt" />
+        <button id="btnLoadText">Load Text</button>
+        <button id="btnClear">Clear</button>
+        <button id="btnCopySel">Copy Selected</button>
+        <button id="btnCopyAll">Copy All</button>
+        <button id="btnExportDoc">Export DOC</button>
+        <button id="btnPrintPdf">Export PDF</button>
+        <label class="tiny">
+          <input id="toggleDark" type="checkbox" />
+          Dark
+        </label>
+      </div>
+      <div class="row" style="margin-top:6px;">
+        <input id="searchInput" type="search" placeholder="Search text" />
+        <button id="btnSearch">Search</button>
+        <button id="btnNext">Next</button>
+        <span class="status" id="status">Idle</span>
+      </div>
+    </header>
+    <div class="main">
+      <div class="panel">
+        <div class="row-split">
+          <div class="tiny">Paste or type text below, then click "Load Text".</div>
+          <div class="tiny">Selection inside reader is supported.</div>
+        </div>
+        <textarea id="editor" placeholder="Type or paste text here..."></textarea>
+      </div>
+      <div class="panel doc-panel">
+        <div id="doc" aria-live="polite"></div>
+      </div>
+    </div>
+    <div class="tts-bar" role="region" aria-label="Text to Speech Controls">
+      <div class="tts-controls">
+        <button id="ttsPlay">Play</button>
+        <button id="ttsPause">Pause</button>
+        <button id="ttsResume">Resume</button>
+        <button id="ttsStop">Stop</button>
+        <button id="ttsReadSel">Read Selection</button>
+        <button id="ttsReadPage">Read Page</button>
+        <button id="ttsReadAll">Read All</button>
+        <button id="ttsDownload">Download TTS MP3</button>
+        <select id="voiceSelect" aria-label="Voice"></select>
+        <label>Rate <input id="rate" type="range" min="0.6" max="1.6" step="0.1" value="1" /></label>
+        <label>Pitch <input id="pitch" type="range" min="0.6" max="1.4" step="0.1" value="1" /></label>
+        <label>Vol <input id="volume" type="range" min="0" max="1" step="0.1" value="1" /></label>
+      </div>
+      <div class="status" id="ttsStatus">TTS idle</div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+  <script>
+  (function () {
+    var app = document.getElementById("app");
+    var fileInput = document.getElementById("fileInput");
+    var editor = document.getElementById("editor");
+    var docEl = document.getElementById("doc");
+    var statusEl = document.getElementById("status");
+    var searchInput = document.getElementById("searchInput");
+    var voiceSelect = document.getElementById("voiceSelect");
+    var ttsStatus = document.getElementById("ttsStatus");
+    var toggleDark = document.getElementById("toggleDark");
+
+    var docType = "none";
+    var pdfDoc = null;
+    var pdfTextCache = [];
+    var pages = [];
+    var rendered = 0;
+    var pageCount = 0;
+    var lastSearchIndex = -1;
+    var io = null;
+    var busy = false;
+    var currentPageIndex = 0;
+
+    var speechQueue = [];
+    var speaking = false;
+    var stopRequested = false;
+    var ttsReadAllPdf = false;
+    var ttsReadAllPdfIndex = 0;
+    var onTtsDone = null;
+
+    var audioCtx = null;
+    var mediaDest = null;
+    var mediaRecorder = null;
+    var recordChunks = [];
+    var recordActive = false;
+    var recordMime = "";
+
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function setTtsStatus(msg) {
+      ttsStatus.textContent = msg;
+    }
+
+    function clearDoc() {
+      docEl.innerHTML = "";
+      pdfDoc = null;
+      pdfTextCache = [];
+      pages = [];
+      rendered = 0;
+      pageCount = 0;
+      lastSearchIndex = -1;
+      currentPageIndex = 0;
+      docType = "none";
+      setStatus("Idle");
+    }
+
+    function createPageElement(index) {
+      var page = document.createElement("div");
+      page.className = "page loading";
+      page.setAttribute("data-index", String(index));
+      var num = document.createElement("div");
+      num.className = "num";
+      num.textContent = "Page " + (index + 1);
+      page.appendChild(num);
+      var body = document.createElement("div");
+      body.className = "body";
+      body.textContent = "Loading...";
+      page.appendChild(body);
+      return page;
+    }
+
+    function appendPages(count) {
+      var start = rendered;
+      var end = Math.min(rendered + count, pageCount);
+      for (var i = start; i < end; i++) {
+        var pageEl = createPageElement(i);
+        docEl.appendChild(pageEl);
+      }
+      rendered = end;
+      observePages();
+      if (!("IntersectionObserver" in window)) {
+        loadVisiblePagesFallback();
+      }
+    }
+
+    function observePages() {
+      if ("IntersectionObserver" in window) {
+        if (!io) {
+          io = new IntersectionObserver(function (entries) {
+            for (var i = 0; i < entries.length; i++) {
+              if (entries[i].isIntersecting) {
+                var idx = parseInt(entries[i].target.getAttribute("data-index"), 10);
+                loadPage(idx);
+              }
+            }
+          }, { root: docEl, rootMargin: "100px" });
+        }
+        var nodes = docEl.querySelectorAll(".page.loading");
+        for (var j = 0; j < nodes.length; j++) {
+          io.observe(nodes[j]);
+        }
+      }
+    }
+
+    function throttle(fn, wait) {
+      var last = 0;
+      var timer = null;
+      return function () {
+        var now = Date.now();
+        var remaining = wait - (now - last);
+        var context = this;
+        var args = arguments;
+        if (remaining <= 0) {
+          if (timer) { clearTimeout(timer); timer = null; }
+          last = now;
+          fn.apply(context, args);
+        } else if (!timer) {
+          timer = setTimeout(function () {
+            last = Date.now();
+            timer = null;
+            fn.apply(context, args);
+          }, remaining);
+        }
+      };
+    }
+
+    function onScroll() {
+      var nearBottom = docEl.scrollTop + docEl.clientHeight + 200 >= docEl.scrollHeight;
+      if (nearBottom && rendered < pageCount) {
+        appendPages(3);
+      }
+      if (!("IntersectionObserver" in window)) {
+        loadVisiblePagesFallback();
+      }
+      updateCurrentPageIndex();
+    }
+
+    var onScrollThrottled = throttle(onScroll, 120);
+    docEl.addEventListener("scroll", onScrollThrottled);
+
+    function updateCurrentPageIndex() {
+      var pagesEl = docEl.querySelectorAll(".page");
+      var top = docEl.scrollTop;
+      var idx = 0;
+      for (var i = 0; i < pagesEl.length; i++) {
+        if (pagesEl[i].offsetTop <= top + 8) {
+          idx = i;
+        }
+      }
+      currentPageIndex = idx;
+    }
+
+    function loadPage(index) {
+      var pageEl = docEl.querySelector('.page[data-index="' + index + '"]');
+      if (!pageEl || !pageEl.classList.contains("loading")) return;
+      if (docType === "pdf" && pdfDoc) {
+        pageEl.classList.remove("loading");
+        getPdfPageText(index + 1, function (text) {
+          pageEl.querySelector(".body").textContent = text || "(No text on this page)";
+        });
+      } else if (pages[index]) {
+        pageEl.classList.remove("loading");
+        pageEl.querySelector(".body").textContent = pages[index] || "";
+      }
+    }
+
+    function splitTextToPages(text) {
+      var size = 1800;
+      var arr = [];
+      var i = 0;
+      while (i < text.length) {
+        arr.push(text.slice(i, i + size));
+        i += size;
+      }
+      return arr.length ? arr : [""];
+    }
+
+    function loadTextFromEditor() {
+      clearDoc();
+      var text = editor.value || "";
+      docType = "text";
+      pages = splitTextToPages(text);
+      pageCount = pages.length;
+      appendPages(4);
+      setStatus("Loaded text (" + pageCount + " pages)");
+    }
+
+    function loadTxtFile(file) {
+      clearDoc();
+      var reader = new FileReader();
+      reader.onload = function () {
+        docType = "text";
+        var text = String(reader.result || "");
+        pages = splitTextToPages(text);
+        pageCount = pages.length;
+        appendPages(4);
+        setStatus("Loaded TXT (" + pageCount + " pages)");
+      };
+      reader.readAsText(file);
+    }
+
+    function extractBinaryText(buffer) {
+      var bytes = new Uint8Array(buffer);
+      var out = [];
+      for (var i = 0; i < bytes.length; i++) {
+        var c = bytes[i];
+        if (c === 9 || c === 10 || c === 13 || (c >= 32 && c <= 126)) {
+          out.push(String.fromCharCode(c));
+        } else if (c === 0) {
+          out.push(" ");
+        }
+      }
+      return out.join("").replace(/\s+/g, " ").trim();
+    }
+
+    function loadDocxFile(file) {
+      clearDoc();
+      var reader = new FileReader();
+      reader.onload = function () {
+        mammoth.extractRawText({ arrayBuffer: reader.result })
+          .then(function (result) {
+            docType = "text";
+            pages = splitTextToPages(result.value || "");
+            pageCount = pages.length;
+            appendPages(4);
+            setStatus("Loaded DOCX (" + pageCount + " pages)");
+          })
+          .catch(function () {
+            setStatus("DOCX read failed");
+          });
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function loadDocFile(file) {
+      clearDoc();
+      var reader = new FileReader();
+      reader.onload = function () {
+        docType = "text";
+        var text = extractBinaryText(reader.result);
+        pages = splitTextToPages(text);
+        pageCount = pages.length;
+        appendPages(4);
+        setStatus("Loaded DOC (" + pageCount + " pages)");
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function loadPdfFile(file) {
+      clearDoc();
+      docType = "pdf";
+      var reader = new FileReader();
+      reader.onload = function () {
+        var typed = new Uint8Array(reader.result);
+        if (window.pdfjsLib) {
+          pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.16.105/pdf.worker.min.js";
+        }
+        pdfjsLib.getDocument({ data: typed }).promise.then(function (pdf) {
+          pdfDoc = pdf;
+          pageCount = pdf.numPages;
+          appendPages(3);
+          setStatus("Loaded PDF (" + pageCount + " pages)");
+        });
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function getPdfPageText(pageNum, cb) {
+      if (!pdfDoc) return cb("");
+      if (pdfTextCache[pageNum - 1]) return cb(pdfTextCache[pageNum - 1]);
+      pdfDoc.getPage(pageNum).then(function (page) {
+        return page.getTextContent();
+      }).then(function (textContent) {
+        var strings = [];
+        for (var i = 0; i < textContent.items.length; i++) {
+          strings.push(textContent.items[i].str);
+        }
+        var text = strings.join(" ");
+        pdfTextCache[pageNum - 1] = text;
+        cb(text);
+      });
+    }
+
+    function readFile(file) {
+      var name = (file.name || "").toLowerCase();
+      if (endsWith(name, ".pdf")) return loadPdfFile(file);
+      if (endsWith(name, ".docx")) return loadDocxFile(file);
+      if (endsWith(name, ".doc")) return loadDocFile(file);
+      if (endsWith(name, ".txt")) return loadTxtFile(file);
+      setStatus("Unsupported file");
+    }
+
+    function getSelectionText() {
+      var sel = window.getSelection();
+      if (!sel) return "";
+      return String(sel.toString() || "");
+    }
+
+    function clearHighlights() {
+      var marks = docEl.querySelectorAll("mark");
+      for (var i = 0; i < marks.length; i++) {
+        var text = document.createTextNode(marks[i].textContent);
+        marks[i].parentNode.replaceChild(text, marks[i]);
+      }
+    }
+
+    function highlightInPage(pageEl, term) {
+      var body = pageEl.querySelector(".body");
+      var text = body.textContent;
+      var idx = text.toLowerCase().indexOf(term.toLowerCase());
+      if (idx === -1) return false;
+      var before = text.slice(0, idx);
+      var match = text.slice(idx, idx + term.length);
+      var after = text.slice(idx + term.length);
+      body.textContent = "";
+      body.appendChild(document.createTextNode(before));
+      var mark = document.createElement("mark");
+      mark.textContent = match;
+      body.appendChild(mark);
+      body.appendChild(document.createTextNode(after));
+      return true;
+    }
+
+    function searchInDoc(term) {
+      if (!term) return;
+      clearHighlights();
+      var start = lastSearchIndex + 1;
+      if (start >= pageCount) start = 0;
+      setStatus("Searching...");
+      if (docType === "pdf") {
+        searchPdf(term, start);
+      } else {
+        searchTextPages(term, start);
+      }
+    }
+
+    function searchTextPages(term, start) {
+      for (var i = start; i < pageCount; i++) {
+        if (pages[i] && pages[i].toLowerCase().indexOf(term.toLowerCase()) !== -1) {
+          lastSearchIndex = i;
+          ensurePageRendered(i);
+          setTimeout(function () {
+            var pageEl = docEl.querySelector('.page[data-index="' + lastSearchIndex + '"]');
+            if (pageEl) {
+              highlightInPage(pageEl, term);
+              pageEl.scrollIntoView();
+            }
+          }, 0);
+          setStatus("Found on page " + (i + 1));
+          return;
+        }
+      }
+      lastSearchIndex = -1;
+      setStatus("Not found");
+    }
+
+    function searchPdf(term, start) {
+      if (busy) return;
+      busy = true;
+      var i = start;
+      function next() {
+        if (i >= pageCount) {
+          busy = false;
+          lastSearchIndex = -1;
+          setStatus("Not found");
+          return;
+        }
+        getPdfPageText(i + 1, function (text) {
+          if (text && text.toLowerCase().indexOf(term.toLowerCase()) !== -1) {
+            busy = false;
+            lastSearchIndex = i;
+            ensurePageRendered(i);
+            setTimeout(function () {
+              var pageEl = docEl.querySelector('.page[data-index="' + i + '"]');
+              if (pageEl) {
+                highlightInPage(pageEl, term);
+                pageEl.scrollIntoView();
+              }
+            }, 0);
+            setStatus("Found on page " + (i + 1));
+            return;
+          }
+          i += 1;
+          next();
+        });
+      }
+      next();
+    }
+
+    function ensurePageRendered(index) {
+      while (rendered <= index && rendered < pageCount) {
+        appendPages(3);
+      }
+      var pageEl = docEl.querySelector('.page[data-index="' + index + '"]');
+      if (pageEl && pageEl.classList.contains("loading")) {
+        loadPage(index);
+      }
+    }
+
+    function copyText(text) {
+      if (!text) return;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text);
+      } else {
+        var temp = document.createElement("textarea");
+        temp.value = text;
+        document.body.appendChild(temp);
+        temp.select();
+        document.execCommand("copy");
+        document.body.removeChild(temp);
+      }
+    }
+
+    function getAllText(cb) {
+      if (docType === "pdf" && pdfDoc) {
+        var out = [];
+        var i = 0;
+        function next() {
+          if (i >= pageCount) {
+            cb(out.join("\n\n"));
+            return;
+          }
+          getPdfPageText(i + 1, function (text) {
+            out.push(text || "");
+            i += 1;
+            next();
+          });
+        }
+        next();
+      } else {
+        cb(pages.join("\n\n"));
+      }
+    }
+
+    function exportDoc() {
+      getAllText(function (text) {
+        var html = "<html><head><meta charset='utf-8'></head><body><pre>" +
+          text.replace(/</g, "&lt;").replace(/>/g, "&gt;") +
+          "</pre></body></html>";
+        var blob = new Blob([html], { type: "application/msword" });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = "document.doc";
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+    }
+
+    function printPdf() {
+      window.print();
+    }
+
+    function chunkText(text) {
+      var max = 200;
+      var parts = [];
+      var sentence = "";
+      var i = 0;
+      while (i < text.length) {
+        var ch = text.charAt(i);
+        sentence += ch;
+        if (sentence.length >= max && /[\.!\?]\s/.test(sentence)) {
+          parts.push(sentence.trim());
+          sentence = "";
+        }
+        if (sentence.length >= max * 1.5) {
+          parts.push(sentence.trim());
+          sentence = "";
+        }
+        i += 1;
+      }
+      if (sentence.trim()) parts.push(sentence.trim());
+      return parts;
+    }
+
+    function speakChunks(chunks) {
+      if (!("speechSynthesis" in window)) {
+        setTtsStatus("TTS not supported");
+        return;
+      }
+      if (!chunks || !chunks.length) return;
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.cancel();
+      }
+      stopRequested = false;
+      ttsReadAllPdf = false;
+      speechQueue = chunks.slice(0);
+      speaking = true;
+      speakNext();
+    }
+
+    function speakNext() {
+      if (!speaking || stopRequested) return;
+      if (!speechQueue.length) {
+        if (ttsReadAllPdf) {
+          queueNextPdfPage();
+          return;
+        }
+        speaking = false;
+        setTtsStatus("TTS done");
+        if (onTtsDone) {
+          var cb = onTtsDone;
+          onTtsDone = null;
+          cb();
+        }
+        return;
+      }
+      var text = speechQueue.shift();
+      var utter = new SpeechSynthesisUtterance(text);
+      var voice = getSelectedVoice();
+      if (voice) utter.voice = voice;
+      utter.rate = parseFloat(document.getElementById("rate").value);
+      utter.pitch = parseFloat(document.getElementById("pitch").value);
+      utter.volume = parseFloat(document.getElementById("volume").value);
+      utter.onend = function () {
+        speakNext();
+      };
+      utter.onerror = function () {
+        speakNext();
+      };
+      setTtsStatus("Speaking...");
+      window.speechSynthesis.speak(utter);
+    }
+
+    function stopSpeech() {
+      if (!("speechSynthesis" in window)) return;
+      stopRequested = true;
+      speaking = false;
+      ttsReadAllPdf = false;
+      if (onTtsDone) {
+        onTtsDone = null;
+      }
+      speechQueue = [];
+      window.speechSynthesis.cancel();
+      setTtsStatus("TTS stopped");
+    }
+
+    function pauseSpeech() {
+      if (!("speechSynthesis" in window)) return;
+      window.speechSynthesis.pause();
+      setTtsStatus("TTS paused");
+    }
+
+    function resumeSpeech() {
+      if (!("speechSynthesis" in window)) return;
+      window.speechSynthesis.resume();
+      setTtsStatus("TTS resumed");
+    }
+
+    function getSelectedVoice() {
+      var voices = window.speechSynthesis.getVoices() || [];
+      var idx = parseInt(voiceSelect.value, 10);
+      if (voices[idx]) return voices[idx];
+      return voices[0] || null;
+    }
+
+    function refreshVoices() {
+      if (!("speechSynthesis" in window)) {
+        voiceSelect.innerHTML = "<option>TTS not supported</option>";
+        return;
+      }
+      var voices = window.speechSynthesis.getVoices() || [];
+      voiceSelect.innerHTML = "";
+      if (!voices.length) {
+        var opt = document.createElement("option");
+        opt.textContent = "Default";
+        opt.value = "0";
+        voiceSelect.appendChild(opt);
+        return;
+      }
+      for (var i = 0; i < voices.length; i++) {
+        var o = document.createElement("option");
+        o.value = String(i);
+        o.textContent = voices[i].name + " (" + voices[i].lang + ")";
+        voiceSelect.appendChild(o);
+      }
+    }
+
+    function readSelection() {
+      var text = getSelectionText();
+      if (!text) return;
+      speakChunks(chunkText(text));
+    }
+
+    function readCurrentPage() {
+      var idx = currentPageIndex;
+      if (docType === "pdf") {
+        getPdfPageText(idx + 1, function (text) {
+          speakChunks(chunkText(text || ""));
+        });
+      } else {
+        speakChunks(chunkText(pages[idx] || ""));
+      }
+    }
+
+    function readAll() {
+      if (docType === "pdf") {
+        if ("speechSynthesis" in window && window.speechSynthesis.speaking) {
+          window.speechSynthesis.cancel();
+        }
+        stopRequested = false;
+        ttsReadAllPdf = true;
+        ttsReadAllPdfIndex = 0;
+        queueNextPdfPage();
+      } else {
+        speakChunks(chunkText(pages.join("\n\n")));
+      }
+    }
+
+    function queueNextPdfPage() {
+      if (!pdfDoc || stopRequested) return;
+      if (ttsReadAllPdfIndex >= pageCount) {
+        ttsReadAllPdf = false;
+        speaking = false;
+        setTtsStatus("TTS done");
+        if (onTtsDone) {
+          var cb = onTtsDone;
+          onTtsDone = null;
+          cb();
+        }
+        return;
+      }
+      getPdfPageText(ttsReadAllPdfIndex + 1, function (text) {
+        ttsReadAllPdfIndex += 1;
+        var parts = chunkText(text || "");
+        if (parts.length) {
+          speechQueue = parts.slice(0);
+          speaking = true;
+          speakNext();
+        } else {
+          queueNextPdfPage();
+        }
+      });
+    }
+
+    function initRecorder() {
+      if (!audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        mediaDest = audioCtx.createMediaStreamDestination();
+      }
+      if (!recordMime) {
+        if (window.MediaRecorder && MediaRecorder.isTypeSupported("audio/mpeg")) {
+          recordMime = "audio/mpeg";
+        } else if (window.MediaRecorder && MediaRecorder.isTypeSupported("audio/webm;codecs=opus")) {
+          recordMime = "audio/webm;codecs=opus";
+        } else {
+          recordMime = "audio/webm";
+        }
+      }
+      if (!mediaRecorder) {
+        mediaRecorder = new MediaRecorder(mediaDest.stream, recordMime ? { mimeType: recordMime } : undefined);
+        mediaRecorder.ondataavailable = function (e) {
+          if (e.data && e.data.size) recordChunks.push(e.data);
+        };
+        mediaRecorder.onstop = function () {
+          var mime = recordMime || "audio/webm";
+          var ext = mime.indexOf("mpeg") !== -1 ? "mp3" : "webm";
+          var blob = new Blob(recordChunks, { type: mime });
+          recordChunks = [];
+          var url = URL.createObjectURL(blob);
+          var a = document.createElement("a");
+          a.href = url;
+          a.download = "tts-output." + ext;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(url);
+        };
+      }
+    }
+
+    function startRecording() {
+      if (!window.MediaRecorder) return false;
+      initRecorder();
+      recordChunks = [];
+      recordActive = true;
+      if (audioCtx && audioCtx.state === "suspended") {
+        audioCtx.resume();
+      }
+      mediaRecorder.start();
+      return true;
+    }
+
+    function stopRecording() {
+      if (!recordActive) return;
+      recordActive = false;
+      if (mediaRecorder && mediaRecorder.state !== "inactive") {
+        mediaRecorder.stop();
+      }
+    }
+
+    function downloadTts() {
+      var text = getSelectionText();
+      if (!text) {
+        if (docType === "pdf") {
+          getPdfPageText(currentPageIndex + 1, function (t) {
+            startRecording();
+            onTtsDone = stopRecording;
+            speakChunks(chunkText(t || ""));
+          });
+          return;
+        } else {
+          text = pages[currentPageIndex] || "";
+        }
+      }
+      if (!startRecording()) return;
+      onTtsDone = stopRecording;
+      speakChunks(chunkText(text));
+    }
+
+    function loadVisiblePagesFallback() {
+      var nodes = docEl.querySelectorAll(".page.loading");
+      var top = docEl.scrollTop;
+      var bottom = top + docEl.clientHeight + 200;
+      for (var i = 0; i < nodes.length; i++) {
+        var elTop = nodes[i].offsetTop;
+        if (elTop < bottom && elTop + nodes[i].offsetHeight > top - 200) {
+          var idx = parseInt(nodes[i].getAttribute("data-index"), 10);
+          loadPage(idx);
+        }
+      }
+    }
+
+    function endsWith(text, suffix) {
+      return text.slice(-suffix.length) === suffix;
+    }
+
+    fileInput.addEventListener("change", function (e) {
+      var file = e.target.files && e.target.files[0];
+      if (file) readFile(file);
+    });
+    document.getElementById("btnLoadText").addEventListener("click", loadTextFromEditor);
+    document.getElementById("btnClear").addEventListener("click", clearDoc);
+    document.getElementById("btnCopySel").addEventListener("click", function () {
+      copyText(getSelectionText());
+    });
+    document.getElementById("btnCopyAll").addEventListener("click", function () {
+      getAllText(function (t) { copyText(t); });
+    });
+    document.getElementById("btnExportDoc").addEventListener("click", exportDoc);
+    document.getElementById("btnPrintPdf").addEventListener("click", printPdf);
+    document.getElementById("btnSearch").addEventListener("click", function () {
+      searchInDoc(searchInput.value.trim());
+    });
+    document.getElementById("btnNext").addEventListener("click", function () {
+      searchInDoc(searchInput.value.trim());
+    });
+    document.getElementById("ttsPlay").addEventListener("click", function () {
+      if ("speechSynthesis" in window && window.speechSynthesis.paused) {
+        resumeSpeech();
+        return;
+      }
+      var sel = getSelectionText();
+      if (sel) {
+        speakChunks(chunkText(sel));
+      } else {
+        readCurrentPage();
+      }
+    });
+    document.getElementById("ttsPause").addEventListener("click", pauseSpeech);
+    document.getElementById("ttsResume").addEventListener("click", resumeSpeech);
+    document.getElementById("ttsStop").addEventListener("click", stopSpeech);
+    document.getElementById("ttsReadSel").addEventListener("click", readSelection);
+    document.getElementById("ttsReadPage").addEventListener("click", readCurrentPage);
+    document.getElementById("ttsReadAll").addEventListener("click", readAll);
+    document.getElementById("ttsDownload").addEventListener("click", downloadTts);
+
+    toggleDark.addEventListener("change", function () {
+      if (toggleDark.checked) app.classList.add("dark");
+      else app.classList.remove("dark");
+    });
+
+    if ("speechSynthesis" in window) {
+      window.speechSynthesis.onvoiceschanged = refreshVoices;
+    }
+    refreshVoices();
+
+    setStatus("Idle");
+  })();
+  </script>
+</body>
+</html>
